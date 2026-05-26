@@ -129,6 +129,28 @@ export async function processServers(steamServers: SteamServer[]): Promise<void>
 
   await upsertServers(parsed)
   await insertStats(parsed, now)
+  await updateGameStats(parsed, now)
+}
+
+async function updateGameStats(parsed: ParsedServer[], now: Date): Promise<void> {
+  const appids = [...new Set(parsed.map((s) => s.appid))]
+
+  for (const appid of appids) {
+    const players = parsed
+      .filter((s) => s.appid === appid)
+      .reduce((sum, s) => sum + s.players, 0)
+
+    const rows: Array<{ servers: string }> = await AppDataSource.query(
+      `SELECT COUNT(*)::int AS servers FROM servers WHERE appid = $1`,
+      [appid],
+    )
+    const servers = parseInt(rows[0].servers)
+
+    await AppDataSource.query(
+      `UPDATE games SET players = $1, servers = $2, updated_at = $3 WHERE appid = $4`,
+      [players, servers, now, appid],
+    )
+  }
 }
 
 export async function markOfflineServers(

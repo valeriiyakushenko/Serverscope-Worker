@@ -6,6 +6,7 @@ import { AppDataSource } from './config/database'
 import { runCollectJob } from './jobs/collectServers'
 import { runRankingJob } from './jobs/calculateRankings'
 import { runCleanupJob } from './jobs/cleanupStats'
+import { runUpdateGamesStatsJob } from './jobs/updateGamesStats'
 import { logger } from './logger'
 
 async function bootstrap(): Promise<void> {
@@ -36,6 +37,12 @@ async function bootstrap(): Promise<void> {
     })
   })
 
+  cron.schedule('0 * * * *', () => {
+    runUpdateGamesStatsJob().catch((err: unknown) => {
+      logger.error(`Scheduled games stats job failed: ${err instanceof Error ? err.message : String(err)}`)
+    })
+  }, { timezone: 'UTC' })
+
   cron.schedule('0 0 * * *', () => {
     runRankingJob().catch((err: unknown) => {
       logger.error(`Scheduled ranking job failed: ${err instanceof Error ? err.message : String(err)}`)
@@ -48,7 +55,7 @@ async function bootstrap(): Promise<void> {
     })
   }, { timezone: 'UTC' })
 
-  logger.info('Cron jobs scheduled: collect */15 * * * *, rankings 0 0 * * * (UTC), cleanup 0 12 * * * (UTC). Worker is running...')
+  logger.info('Cron jobs scheduled: collect */15 * * * *, games stats 0 * * * * (UTC), rankings 0 0 * * * (UTC), cleanup 0 12 * * * (UTC). Worker is running...')
 }
 
 bootstrap().catch((err: unknown) => {

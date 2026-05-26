@@ -3,6 +3,7 @@ import { DataSource } from 'typeorm'
 import { Server } from '../entities/Server'
 import { OnlineRecord } from '../entities/OnlineRecord'
 import { ServerRanking } from '../entities/ServerRanking'
+import { Game } from '../entities/Game'
 
 export const AppDataSource = new DataSource({
   type: 'postgres',
@@ -11,7 +12,7 @@ export const AppDataSource = new DataSource({
   username: process.env.DB_USERNAME,
   password: process.env.DB_PASSWORD,
   database: process.env.DB_NAME,
-  entities: [Server, OnlineRecord, ServerRanking],
+  entities: [Server, OnlineRecord, ServerRanking, Game],
   synchronize: true,
   logging: process.env.NODE_ENV === 'development',
 })
