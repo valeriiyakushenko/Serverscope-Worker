@@ -44,7 +44,7 @@ async function buildGameHourlyOnline(appid: number, now: Date): Promise<number[]
   return rows.map((r) => r.total_players)
 }
 
-async function updateServerCharts(now: Date): Promise<void> {
+export async function updateServerCharts(now: Date): Promise<void> {
   await AppDataSource.query(
     `
     WITH
@@ -93,9 +93,6 @@ export async function runUpdateChartsJob(): Promise<void> {
   logger.info('--- Starting charts update job ---')
 
   const now = new Date()
-
-  await updateServerCharts(now)
-  logger.info('Server charts updated')
 
   for (const game of TRACKED_GAMES) {
     const hourlyOnline = await buildGameHourlyOnline(game.appid, now)

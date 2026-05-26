@@ -1,5 +1,6 @@
 import { fetchSteamServers, STEAM_API_LIMIT, SteamServer } from '../api/steamClient'
 import { processServers, markOfflineServers } from '../services/serverService'
+import { updateServerCharts } from './updateGamesStats'
 import { TRACKED_GAMES, GameConfig, FilterNode } from '../config/games'
 import { logger } from '../logger'
 
@@ -92,6 +93,7 @@ export async function runCollectJob(): Promise<void> {
   const trackedAppids = TRACKED_GAMES.map((g) => g.appid)
   const now = new Date()
   await markOfflineServers(trackedAppids, cycleStartTime, now)
+  await updateServerCharts(now)
 
   const duration = ((Date.now() - startMs) / 1000).toFixed(2)
   logger.info(`--- Job completed in ${duration}s ---`)
