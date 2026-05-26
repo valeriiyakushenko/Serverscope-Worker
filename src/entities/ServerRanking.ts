@@ -1,10 +1,9 @@
-import { Entity, PrimaryGeneratedColumn, Column, ManyToOne, JoinColumn, Index, Unique } from 'typeorm'
+import { Entity, PrimaryGeneratedColumn, Column, ManyToOne, JoinColumn, Index } from 'typeorm'
 
 import { Server } from './Server'
 
 @Entity('server_rankings')
-@Unique('uq_server_rankings_server_id_calculated_at', ['serverId', 'calculatedAt'])
-@Index('idx_server_rankings_server_id_calculated_at', ['serverId', 'calculatedAt'])
+@Index('idx_server_rankings_server_id_calculated_at', ['serverId', 'calculatedAt'], { unique: true })
 @Index('idx_server_rankings_appid_calculated_at_rank', ['appid', 'calculatedAt', 'rank'])
 export class ServerRanking {
   @PrimaryGeneratedColumn()
@@ -25,6 +24,18 @@ export class ServerRanking {
 
   @Column({ type: 'int' })
   rank!: number
+
+  @Column({ name: 'empty_count', type: 'int', default: 0 })
+  emptyCount!: number
+
+  @Column({ name: 'uptime_ratio', type: 'numeric', precision: 6, scale: 4, default: 0 })
+  uptimeRatio!: number
+
+  @Column({ name: 'historical_rank_avg', type: 'numeric', precision: 6, scale: 4, default: 0.5 })
+  historicalRankAvg!: number
+
+  @Column({ type: 'numeric', precision: 6, scale: 4, default: 0 })
+  score!: number
 
   @Column({ name: 'calculated_at', type: 'timestamptz' })
   calculatedAt!: Date

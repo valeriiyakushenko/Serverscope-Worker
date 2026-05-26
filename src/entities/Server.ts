@@ -1,9 +1,10 @@
-import { Entity, PrimaryGeneratedColumn, Column, CreateDateColumn, Unique, OneToMany } from 'typeorm'
+import { Entity, PrimaryGeneratedColumn, Column, CreateDateColumn, Unique, OneToMany, Index } from 'typeorm'
 
 import { OnlineRecord } from './OnlineRecord'
 
 @Entity('servers')
 @Unique(['ip', 'queryPort'])
+@Index('idx_servers_appid_rank', ['appid', 'rank'])
 export class Server {
   @PrimaryGeneratedColumn()
   id!: number
@@ -52,6 +53,12 @@ export class Server {
 
   @Column({ name: 'max_players', type: 'int', default: 0 })
   maxPlayers!: number
+
+  @Column({ type: 'int', default: 0 })
+  players!: number
+
+  @Column({ type: 'int', default: 0 })
+  rank!: number
 
   @Column({ name: 'is_online', type: 'boolean', default: true })
   isOnline!: boolean

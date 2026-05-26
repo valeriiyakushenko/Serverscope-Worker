@@ -9,7 +9,12 @@ interface RankRow {
   server_id: number
   appid: number
   median_players: string
-  rank: string
+  empty_count: number
+}
+
+interface HistoricalRankRow {
+  server_id: number
+  historical_rank_avg: string
 }
 
 async function computeRanks(appid: number, now: Date): Promise<RankRow[]> {
@@ -56,15 +61,49 @@ async function computeRanks(appid: number, now: Date): Promise<RankRow[]> {
         PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY players) AS median_players
       FROM server_hourly
       GROUP BY server_id, appid
+    ),
+    empty_counts AS (
+      SELECT
+        st.server_id,
+        COUNT(*) FILTER (WHERE st.players = 0)::int AS empty_count
+      FROM online_records st
+      JOIN period ON st.recorded_at >= period.period_start
+                 AND st.recorded_at <  period.period_end
+      WHERE st.server_id IN (SELECT id FROM servers WHERE appid = $2)
+      GROUP BY st.server_id
     )
     SELECT
-      server_id,
-      appid,
-      median_players,
-      ROW_NUMBER() OVER (PARTITION BY appid ORDER BY median_players DESC) AS rank
-    FROM server_medians
+      sm.server_id,
+      sm.appid,
+      sm.median_players,
+      COALESCE(ec.empty_count, 96) AS empty_count
+    FROM server_medians sm
+    LEFT JOIN empty_counts ec ON ec.server_id = sm.server_id
     `,
     [now, appid],
+  )
+}
+
+async function computeHistoricalRanks(appid: number, before: Date): Promise<HistoricalRankRow[]> {
+  return AppDataSource.query<HistoricalRankRow[]>(
+    `
+    SELECT
+      server_id,
+      AVG(COALESCE(1.0 - (rank - 1.0) / NULLIF(total_servers - 1, 0), 1.0)) AS historical_rank_avg
+    FROM (
+      SELECT
+        sr.server_id,
+        sr.rank,
+        COUNT(*) OVER (PARTITION BY sr.appid, sr.calculated_at) AS total_servers,
+        ROW_NUMBER() OVER (PARTITION BY sr.server_id ORDER BY sr.calculated_at DESC) AS rn
+      FROM server_rankings sr
+      WHERE sr.appid = $1
+        AND sr.calculated_at < $2
+    ) sub
+    WHERE rn <= 3
+    GROUP BY server_id
+    `,
+    [appid, before],
   )
 }
 
@@ -87,16 +126,47 @@ export async function calculateDailyRankings(): Promise<void> {
 
     logger.info(`[appid:${appid}] Inserting ${rows.length} ranking records`)
 
-    const entities: Partial<ServerRanking>[] = rows.map((r) => ({
-      serverId: r.server_id,
+    const historicalRows = await computeHistoricalRanks(appid, now)
+    const historicalMap = new Map(historicalRows.map((r) => [r.server_id, parseFloat(r.historical_rank_avg)]))
+
+    const maxMedian = Math.max(...rows.map((r) => parseFloat(r.median_players)), 0)
+
+    const scored = rows.map((r) => {
+      const median = parseFloat(r.median_players)
+      const emptyCount = r.empty_count
+      const historicalRankAvg = historicalMap.get(r.server_id) ?? 0.5
+      const uptimeRatio = 1 - emptyCount / 96
+      const medianNorm = maxMedian > 0 ? median / maxMedian : 0
+      const score = 0.5 * medianNorm + 0.25 * uptimeRatio + 0.25 * historicalRankAvg
+      return { serverId: r.server_id, appid: r.appid, median, emptyCount, uptimeRatio, historicalRankAvg, score }
+    })
+
+    scored.sort((a, b) => b.score - a.score)
+
+    const entities: Partial<ServerRanking>[] = scored.map((r, i) => ({
+      serverId: r.serverId,
       appid: r.appid,
-      medianPlayers: parseFloat(r.median_players),
-      rank: parseInt(r.rank, 10),
+      medianPlayers: r.median,
+      emptyCount: r.emptyCount,
+      uptimeRatio: r.uptimeRatio,
+      historicalRankAvg: r.historicalRankAvg,
+      score: r.score,
+      rank: i + 1,
       calculatedAt: now,
     }))
 
     for (let i = 0; i < entities.length; i += CHUNK_SIZE) {
       await dailyStatsRepo.insert(entities.slice(i, i + CHUNK_SIZE))
+    }
+
+    for (let i = 0; i < scored.length; i += CHUNK_SIZE) {
+      const chunk = scored.slice(i, i + CHUNK_SIZE)
+      const cases = chunk.map((_, j) => `WHEN $${j * 2 + 1} THEN $${j * 2 + 2}`).join(' ')
+      const params: (number | string)[] = chunk.flatMap((r, j) => [r.serverId, j + i + 1])
+      await AppDataSource.query(
+        `UPDATE servers SET rank = CASE id ${cases} END WHERE id = ANY($${params.length + 1})`,
+        [...params, chunk.map((r) => r.serverId)],
+      )
     }
 
     logger.info(`[appid:${appid}] Rankings saved`)

@@ -2,7 +2,7 @@ import { AppDataSource } from '../config/database'
 import { logger } from '../logger'
 
 const RETENTION_DAYS = 30
-const DETAIL_HOURS = 24
+const DETAIL_HOURS = 36
 
 export async function runCleanupJob(): Promise<void> {
   const startTime = Date.now()

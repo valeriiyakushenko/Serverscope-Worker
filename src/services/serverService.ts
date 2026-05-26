@@ -63,7 +63,7 @@ async function upsertServers(parsed: ParsedServer[]): Promise<void> {
 
   for (let i = 0; i < parsed.length; i += CHUNK_SIZE) {
     const chunk = parsed.slice(i, i + CHUNK_SIZE)
-    const entities = chunk.map(({ players, ...server }) => ({ ...server, isOnline: true }))
+    const entities = chunk.map(({ ...server }) => ({ ...server, isOnline: true }))
 
     await serverRepo.upsert(entities, {
       conflictPaths: ['ip', 'queryPort'],
@@ -155,7 +155,7 @@ export async function markOfflineServers(
     logger.info(`[appid:${appid}] Marking ${offlineRows.length} servers as offline`)
 
     await AppDataSource.query(
-      `UPDATE servers SET is_online = false WHERE id = ANY($1)`,
+      `UPDATE servers SET is_online = false, players = 0 WHERE id = ANY($1)`,
       [offlineRows.map((r) => r.id)],
     )
 
