@@ -177,7 +177,7 @@ export async function markOfflineServers(
     logger.info(`[appid:${appid}] Marking ${offlineRows.length} servers as offline`)
 
     await AppDataSource.query(
-      `UPDATE servers SET is_online = false, players = 0 WHERE id = ANY($1)`,
+      `UPDATE servers SET is_online = false, players = 0, hourly_online = (SELECT jsonb_agg(0) FROM generate_series(1, 24)) WHERE id = ANY($1)`,
       [offlineRows.map((r) => r.id)],
     )
 

@@ -7,7 +7,7 @@ interface HourlyRow {
   total_players: number
 }
 
-async function buildHourlyOnline(appid: number, now: Date): Promise<number[]> {
+async function buildGameHourlyOnline(appid: number, now: Date): Promise<number[]> {
   const rows = await AppDataSource.query<HourlyRow[]>(
     `
     WITH
@@ -44,23 +44,70 @@ async function buildHourlyOnline(appid: number, now: Date): Promise<number[]> {
   return rows.map((r) => r.total_players)
 }
 
-export async function runUpdateGamesStatsJob(): Promise<void> {
+async function updateServerCharts(now: Date): Promise<void> {
+  await AppDataSource.query(
+    `
+    WITH
+    period AS (
+      SELECT
+        date_trunc('hour', $1::timestamptz) - INTERVAL '23 hours' AS period_start,
+        date_trunc('hour', $1::timestamptz) + INTERVAL '1 hour'   AS period_end
+    ),
+    hourly_slots AS (
+      SELECT generate_series(period_start, period_end - INTERVAL '1 hour', INTERVAL '1 hour') AS slot_start
+      FROM period
+    ),
+    active_servers AS (
+      SELECT DISTINCT r.server_id
+      FROM online_records r
+      JOIN period ON r.recorded_at >= period.period_start AND r.recorded_at < period.period_end
+    ),
+    bucketed AS (
+      SELECT
+        r.server_id,
+        date_trunc('hour', r.recorded_at) AS hour,
+        AVG(r.players)::int               AS avg_players
+      FROM online_records r
+      JOIN period ON r.recorded_at >= period.period_start AND r.recorded_at < period.period_end
+      GROUP BY r.server_id, date_trunc('hour', r.recorded_at)
+    ),
+    server_graphs AS (
+      SELECT
+        a.server_id,
+        jsonb_agg(COALESCE(b.avg_players, 0) ORDER BY hs.slot_start) AS hourly_online
+      FROM active_servers a
+      CROSS JOIN hourly_slots hs
+      LEFT JOIN bucketed b ON b.server_id = a.server_id AND b.hour = hs.slot_start
+      GROUP BY a.server_id
+    )
+    UPDATE servers SET hourly_online = sg.hourly_online
+    FROM server_graphs sg
+    WHERE servers.id = sg.server_id
+    `,
+    [now],
+  )
+}
+
+export async function runUpdateChartsJob(): Promise<void> {
   const startTime = Date.now()
-  logger.info('--- Starting games hourly_online update job ---')
+  logger.info('--- Starting charts update job ---')
 
   const now = new Date()
 
+  await updateServerCharts(now)
+  logger.info('Server charts updated')
+
   for (const game of TRACKED_GAMES) {
-    const hourlyOnline = await buildHourlyOnline(game.appid, now)
+    const hourlyOnline = await buildGameHourlyOnline(game.appid, now)
 
     await AppDataSource.query(
       `UPDATE games SET hourly_online = $1, updated_at = $2 WHERE appid = $3`,
       [JSON.stringify(hourlyOnline), now, game.appid],
     )
 
-    logger.info(`[appid:${game.appid}] hourly_online updated`)
+    logger.info(`[appid:${game.appid}] game hourly_online updated`)
   }
 
   const duration = ((Date.now() - startTime) / 1000).toFixed(2)
-  logger.info(`--- Games hourly_online update complete in ${duration}s ---`)
+  logger.info(`--- Charts update complete in ${duration}s ---`)
 }

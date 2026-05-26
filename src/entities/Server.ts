@@ -60,6 +60,9 @@ export class Server {
   @Column({ type: 'int', default: 0 })
   rank!: number
 
+  @Column({ name: 'hourly_online', type: 'jsonb', default: [] })
+  hourlyOnline!: number[]
+
   @Column({ name: 'is_online', type: 'boolean', default: true })
   isOnline!: boolean
 

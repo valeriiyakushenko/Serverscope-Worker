@@ -6,7 +6,7 @@ import { AppDataSource } from './config/database'
 import { runCollectJob } from './jobs/collectServers'
 import { runRankingJob } from './jobs/calculateRankings'
 import { runCleanupJob } from './jobs/cleanupStats'
-import { runUpdateGamesStatsJob } from './jobs/updateGamesStats'
+import { runUpdateChartsJob } from './jobs/updateGamesStats'
 import { logger } from './logger'
 
 async function bootstrap(): Promise<void> {
@@ -38,8 +38,8 @@ async function bootstrap(): Promise<void> {
   })
 
   cron.schedule('0 * * * *', () => {
-    runUpdateGamesStatsJob().catch((err: unknown) => {
-      logger.error(`Scheduled games stats job failed: ${err instanceof Error ? err.message : String(err)}`)
+    runUpdateChartsJob().catch((err: unknown) => {
+      logger.error(`Scheduled charts job failed: ${err instanceof Error ? err.message : String(err)}`)
     })
   }, { timezone: 'UTC' })
 
