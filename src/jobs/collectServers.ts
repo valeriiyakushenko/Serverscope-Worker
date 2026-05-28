@@ -1,10 +1,9 @@
 import { fetchSteamServers, STEAM_API_LIMIT, SteamServer } from '../api/steamClient'
-import { processServers, markOfflineServers } from '../services/serverService'
-import { updateServerCharts } from './updateGamesStats'
+import { processServers } from '../services/serverService'
 import { TRACKED_GAMES, GameConfig, FilterNode } from '../config/games'
 import { logger } from '../logger'
 
-const REQUEST_DELAY_MS = 2_000
+const REQUEST_DELAY_MS = 1_000
 
 async function delay(ms: number): Promise<void> {
   await new Promise((resolve) => setTimeout(resolve, ms))
@@ -77,7 +76,6 @@ async function collectGame(game: GameConfig): Promise<void> {
 }
 
 export async function runCollectJob(): Promise<void> {
-  const cycleStartTime = new Date()
   const startMs = Date.now()
   logger.info(`--- Starting server collection job (${TRACKED_GAMES.length} game(s)) ---`)
 
@@ -89,11 +87,6 @@ export async function runCollectJob(): Promise<void> {
       await delay(REQUEST_DELAY_MS)
     }
   }
-
-  const trackedAppids = TRACKED_GAMES.map((g) => g.appid)
-  const now = new Date()
-  await markOfflineServers(trackedAppids, cycleStartTime, now)
-  await updateServerCharts(now)
 
   const duration = ((Date.now() - startMs) / 1000).toFixed(2)
   logger.info(`--- Job completed in ${duration}s ---`)

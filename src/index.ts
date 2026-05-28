@@ -15,21 +15,23 @@ async function bootstrap(): Promise<void> {
   await AppDataSource.initialize()
   logger.info('Database connection established')
 
-  /*
 
-  await runCollectJob().catch((err: unknown) => {
-    logger.error(`Initial collect job failed: ${err instanceof Error ? err.message : String(err)}`)
-  })
+  // await runCollectJob().catch((err: unknown) => {
+  //   logger.error(`Initial collect job failed: ${err instanceof Error ? err.message : String(err)}`)
+  // })
 
-  await runRankingJob().catch((err: unknown) => {
-    logger.error(`Initial ranking job failed: ${err instanceof Error ? err.message : String(err)}`)
-  })
+  // await runUpdateChartsJob().catch((err: unknown) => {
+  //   logger.error(`Initial charts job failed: ${err instanceof Error ? err.message : String(err)}`)
+  // })
 
-  await runCleanupJob().catch((err: unknown) => {
-    logger.error(`Initial cleanup job failed: ${err instanceof Error ? err.message : String(err)}`)
-  })
+  // await runRankingJob().catch((err: unknown) => {
+  //   logger.error(`Initial ranking job failed: ${err instanceof Error ? err.message : String(err)}`)
+  // })
 
-  */
+  // await runCleanupJob().catch((err: unknown) => {
+  //   logger.error(`Initial cleanup job failed: ${err instanceof Error ? err.message : String(err)}`)
+  // })
+
 
   cron.schedule('*/15 * * * *', () => {
     runCollectJob().catch((err: unknown) => {

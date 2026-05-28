@@ -37,6 +37,12 @@ export class ServerRanking {
   @Column({ type: 'numeric', precision: 6, scale: 4, default: 0 })
   score!: number
 
+  @Column({ type: 'numeric', precision: 7, scale: 2, default: 0 })
+  popularity!: number
+
+  @Column({ type: 'numeric', precision: 6, scale: 4, default: 0 })
+  stability!: number
+
   @Column({ name: 'calculated_at', type: 'timestamptz' })
   calculatedAt!: Date
 }

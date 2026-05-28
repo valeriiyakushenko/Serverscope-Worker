@@ -1,47 +1,53 @@
 import { AppDataSource } from '../config/database'
-import { TRACKED_GAMES } from '../config/games'
 import { logger } from '../logger'
 
-interface HourlyRow {
-  slot_start: string
-  total_players: number
-}
-
-async function buildGameHourlyOnline(appid: number, now: Date): Promise<number[]> {
-  const rows = await AppDataSource.query<HourlyRow[]>(
+async function updateGameCharts(now: Date): Promise<void> {
+  await AppDataSource.query(
     `
     WITH
     period AS (
       SELECT
-        date_trunc('hour', $2::timestamptz) - INTERVAL '23 hours' AS period_start,
-        date_trunc('hour', $2::timestamptz) + INTERVAL '1 hour'   AS period_end
+        date_trunc('hour', $1::timestamptz) - INTERVAL '23 hours' AS period_start,
+        date_trunc('hour', $1::timestamptz) + INTERVAL '1 hour'   AS period_end
     ),
     hourly_slots AS (
       SELECT generate_series(period_start, period_end - INTERVAL '1 hour', INTERVAL '1 hour') AS slot_start
       FROM period
     ),
-    sums AS (
+    snapshots AS (
       SELECT
-        date_trunc('hour', r.recorded_at) AS hour,
-        SUM(r.players)::int               AS total_players
+        s.appid,
+        r.recorded_at,
+        SUM(r.players) AS snapshot_total
       FROM online_records r
       JOIN servers s ON s.id = r.server_id
       JOIN period ON r.recorded_at >= period.period_start
                  AND r.recorded_at <  period.period_end
-      WHERE s.appid = $1
-      GROUP BY date_trunc('hour', r.recorded_at)
+      GROUP BY s.appid, r.recorded_at
+    ),
+    hourly_avg AS (
+      SELECT
+        appid,
+        date_trunc('hour', recorded_at) AS hour,
+        AVG(snapshot_total)::int        AS avg_players
+      FROM snapshots
+      GROUP BY appid, date_trunc('hour', recorded_at)
+    ),
+    game_graphs AS (
+      SELECT
+        g.appid,
+        jsonb_agg(COALESCE(ha.avg_players, 0) ORDER BY hs.slot_start) AS hourly_online
+      FROM games g
+      CROSS JOIN hourly_slots hs
+      LEFT JOIN hourly_avg ha ON ha.appid = g.appid AND ha.hour = hs.slot_start
+      GROUP BY g.appid
     )
-    SELECT
-      hs.slot_start,
-      COALESCE(sums.total_players, 0) AS total_players
-    FROM hourly_slots hs
-    LEFT JOIN sums ON sums.hour = hs.slot_start
-    ORDER BY hs.slot_start
+    UPDATE games SET hourly_online = gg.hourly_online, updated_at = $1
+    FROM game_graphs gg
+    WHERE games.appid = gg.appid
     `,
-    [appid, now],
+    [now],
   )
-
-  return rows.map((r) => r.total_players)
 }
 
 export async function updateServerCharts(now: Date): Promise<void> {
@@ -94,16 +100,9 @@ export async function runUpdateChartsJob(): Promise<void> {
 
   const now = new Date()
 
-  for (const game of TRACKED_GAMES) {
-    const hourlyOnline = await buildGameHourlyOnline(game.appid, now)
-
-    await AppDataSource.query(
-      `UPDATE games SET hourly_online = $1, updated_at = $2 WHERE appid = $3`,
-      [JSON.stringify(hourlyOnline), now, game.appid],
-    )
-
-    logger.info(`[appid:${game.appid}] game hourly_online updated`)
-  }
+  await updateServerCharts(now)
+  await updateGameCharts(now)
+  logger.info('Game hourly_online updated')
 
   const duration = ((Date.now() - startTime) / 1000).toFixed(2)
   logger.info(`--- Charts update complete in ${duration}s ---`)

@@ -4,6 +4,7 @@ import { Server } from './Server'
 
 @Entity('online_records')
 @Index('idx_online_records_server_id_recorded_at', ['serverId', 'recordedAt'])
+@Index('idx_online_records_recorded_at', ['recordedAt'])
 export class OnlineRecord {
   @PrimaryGeneratedColumn()
   id!: number
