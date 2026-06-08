@@ -7,8 +7,8 @@ async function updateGameCharts(now: Date): Promise<void> {
     WITH
     period AS (
       SELECT
-        date_trunc('hour', $1::timestamptz) - INTERVAL '23 hours' AS period_start,
-        date_trunc('hour', $1::timestamptz) + INTERVAL '1 hour'   AS period_end
+        date_trunc('hour', $1::timestamptz) - INTERVAL '24 hours' AS period_start,
+        date_trunc('hour', $1::timestamptz)                      AS period_end
     ),
     hourly_slots AS (
       SELECT generate_series(period_start, period_end - INTERVAL '1 hour', INTERVAL '1 hour') AS slot_start
@@ -56,8 +56,8 @@ export async function updateServerCharts(now: Date): Promise<void> {
     WITH
     period AS (
       SELECT
-        date_trunc('hour', $1::timestamptz) - INTERVAL '23 hours' AS period_start,
-        date_trunc('hour', $1::timestamptz) + INTERVAL '1 hour'   AS period_end
+        date_trunc('hour', $1::timestamptz) - INTERVAL '24 hours' AS period_start,
+        date_trunc('hour', $1::timestamptz)                      AS period_end
     ),
     hourly_slots AS (
       SELECT generate_series(period_start, period_end - INTERVAL '1 hour', INTERVAL '1 hour') AS slot_start
