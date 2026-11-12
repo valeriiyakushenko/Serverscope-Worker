@@ -80,7 +80,12 @@ export async function runCollectJob(): Promise<void> {
   logger.info(`--- Starting server collection job (${TRACKED_GAMES.length} game(s)) ---`)
 
   for (let i = 0; i < TRACKED_GAMES.length; i++) {
-    await collectGame(TRACKED_GAMES[i])
+    const game = TRACKED_GAMES[i]
+    try {
+      await collectGame(game)
+    } catch (err: unknown) {
+      logger.error(`Collect failed for ${game.name} (appid: ${game.appid}): ${err instanceof Error ? err.message : String(err)}`)
+    }
 
     if (i < TRACKED_GAMES.length - 1) {
       logger.info(`Waiting ${REQUEST_DELAY_MS}ms before next game...`)

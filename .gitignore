@@ -4,6 +4,6 @@ logs/
 .env
 *.js.map
 .vscode/
-package-lock.json
 
 .DS_Store
+docker-compose.yml

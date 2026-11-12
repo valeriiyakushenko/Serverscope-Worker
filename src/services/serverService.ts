@@ -24,6 +24,7 @@ interface ParsedServer {
   updatedAt: Date
   lastSeenAt: Date
   players: number
+  bots: number
   maxPlayers: number
 }
 
@@ -54,6 +55,7 @@ function parseServer(s: SteamServer, now: Date): ParsedServer | null {
     updatedAt: now,
     lastSeenAt: now,
     players: s.players,
+    bots: s.bots ?? 0,
     maxPlayers: s.max_players,
   }
 }
@@ -101,7 +103,7 @@ async function insertStats(parsed: ParsedServer[], now: Date): Promise<void> {
       .map((s) => {
         const serverId = serverMap.get(`${s.ip}:${s.queryPort}`)
         if (serverId === undefined) return null
-        return { serverId, players: s.players, maxPlayers: s.maxPlayers, recordedAt: now }
+        return { serverId, players: s.players, bots: s.bots, maxPlayers: s.maxPlayers, recordedAt: now }
       })
       .filter((s): s is NonNullable<typeof s> => s !== null)
 

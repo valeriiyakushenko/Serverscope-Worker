@@ -37,6 +37,7 @@ export async function runCleanupJob(): Promise<void> {
          SELECT
            server_id,
            ROUND(AVG(players))::int        AS players,
+           ROUND(AVG(bots))::int           AS bots,
            ROUND(AVG(max_players))::int    AS max_players,
            date_trunc('hour', recorded_at) AS recorded_at
          FROM online_records
@@ -49,8 +50,8 @@ export async function runCleanupJob(): Promise<void> {
          RETURNING id
        ),
        inserted AS (
-         INSERT INTO online_records (server_id, players, max_players, recorded_at)
-         SELECT server_id, players, max_players, recorded_at FROM to_aggregate
+         INSERT INTO online_records (server_id, players, bots, max_players, recorded_at)
+         SELECT server_id, players, bots, max_players, recorded_at FROM to_aggregate
          ON CONFLICT DO NOTHING
          RETURNING id
        )

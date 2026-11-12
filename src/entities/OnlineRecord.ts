@@ -19,6 +19,9 @@ export class OnlineRecord {
   @Column({ type: 'int' })
   players!: number
 
+  @Column({ type: 'int', default: 0 })
+  bots!: number
+
   @Column({ name: 'max_players', type: 'int' })
   maxPlayers!: number
 

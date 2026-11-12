@@ -58,6 +58,9 @@ export class Server {
   players!: number
 
   @Column({ type: 'int', default: 0 })
+  bots!: number
+
+  @Column({ type: 'int', default: 0 })
   rank!: number
 
   @Column({ name: 'hourly_online', type: 'jsonb', default: [] })

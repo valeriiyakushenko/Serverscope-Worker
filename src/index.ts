@@ -5,7 +5,6 @@ import cron from 'node-cron'
 import { AppDataSource } from './config/database'
 import { runCollectJob } from './jobs/collectServers'
 import { runRankingJob } from './jobs/calculateRankings'
-import { runCleanupJob } from './jobs/cleanupStats'
 import { runUpdateChartsJob } from './jobs/updateGamesStats'
 import { logger } from './logger'
 
@@ -51,13 +50,9 @@ async function bootstrap(): Promise<void> {
     })
   }, { timezone: 'UTC' })
 
-  cron.schedule('0 12 * * *', () => {
-    runCleanupJob().catch((err: unknown) => {
-      logger.error(`Scheduled cleanup job failed: ${err instanceof Error ? err.message : String(err)}`)
-    })
-  }, { timezone: 'UTC' })
+  // cleanup (runCleanupJob) is not scheduled: raw 15-minute points are kept until the storage schema is reworked
 
-  logger.info('Cron jobs scheduled: collect */15 * * * *, games stats 0 * * * * (UTC), rankings 0 0 * * * (UTC), cleanup 0 12 * * * (UTC). Worker is running...')
+  logger.info('Cron jobs scheduled: collect */15 * * * *, games stats 0 * * * * (UTC), rankings 0 0 * * * (UTC). Worker is running...')
 }
 
 bootstrap().catch((err: unknown) => {

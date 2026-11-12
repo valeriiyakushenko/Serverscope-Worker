@@ -153,6 +153,22 @@ export async function calculateDailyRankings(): Promise<void> {
   const now = new Date()
   const appids = TRACKED_GAMES.map((g) => g.appid)
 
+  // ranks from a window with empty hours (first day, worker outage) are noise and feed three more days via historical_rank_avg
+  const [{ hours }] = await AppDataSource.query<Array<{ hours: number }>>(
+    `SELECT COUNT(*)::int AS hours
+     FROM generate_series(
+       date_trunc('hour', $1::timestamptz) - INTERVAL '24 hours',
+       date_trunc('hour', $1::timestamptz) - INTERVAL '1 hour',
+       INTERVAL '1 hour'
+     ) AS h
+     WHERE EXISTS (SELECT 1 FROM online_records WHERE recorded_at >= h AND recorded_at < h + INTERVAL '1 hour')`,
+    [now],
+  )
+  if (hours < 24) {
+    logger.warn(`Ranking window is incomplete (${hours}/24 hours have data), calculation skipped`)
+    return
+  }
+
   logger.info(`Calculating daily rankings for ${appids.length} game(s)...`)
 
   for (const appid of appids) {
