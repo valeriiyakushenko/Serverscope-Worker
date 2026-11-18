@@ -126,8 +126,9 @@ async function markMissingOffline(appid: number, now: Date): Promise<void> {
   logger.info(`Marked ${marked} missing servers offline`)
 }
 
-// A failed request never reaches here (throws in collectGame); an empty response returns below without marking
-export async function processServers(steamServers: SteamServer[], appid: number): Promise<void> {
+// A failed request never reaches here (throws in collectGame); an empty response returns below without marking.
+// complete = the list is the whole set of non-empty servers, so a server missing from it is offline
+export async function processServers(steamServers: SteamServer[], appid: number, complete: boolean): Promise<void> {
   if (!steamServers.length) {
     logger.info('No servers in API response, skipping processing')
     return
@@ -143,12 +144,10 @@ export async function processServers(steamServers: SteamServer[], appid: number)
   await upsertServers(parsed)
   await insertStats(parsed, now)
 
-  // shortcut: a response at the limit may be incomplete, so absence proves nothing; this also skips a complete merged
-  // sub-filter result >= limit (no game has fallbackFilters yet) — pass a "complete" flag from fetchWithFallback if one gets them
-  if (steamServers.length < STEAM_API_LIMIT) {
+  if (complete) {
     await markMissingOffline(appid, now)
   } else {
-    logger.warn(`Response reached ${STEAM_API_LIMIT} servers, not marking missing servers offline`)
+    logger.warn(`Server list may be incomplete (${STEAM_API_LIMIT} limit), not marking missing servers offline`)
   }
 
   await updateGameStats(parsed, now)

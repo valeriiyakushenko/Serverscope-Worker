@@ -37,6 +37,10 @@ export interface GameConfig {
   name: string
   baseFilter?: string
   fallbackFilters?: FilterNode[]
+  // split any request that hits the 10k limit by region, then map, then gametype tag, until the list is complete
+  splitOnLimit?: boolean
+  // drop fake-server farms (one IP with many copies of a few names) before saving
+  dropFarms?: boolean
 }
 
 export const TRACKED_GAMES: GameConfig[] = [
@@ -52,7 +56,7 @@ export const TRACKED_GAMES: GameConfig[] = [
   { appid: 1604030, name: 'V Rising' },
   { appid: 346110, name: 'ARK: Survival Evolved' },
   { appid: 4000, name: 'Garry\'s Mod' },
-  { appid: 240, name: 'Counter-Strike: Source' },
+  { appid: 240, name: 'Counter-Strike: Source', splitOnLimit: true, dropFarms: true },
   { appid: 440, name: 'Team Fortress 2' },
   { appid: 730, name: 'Counter-Strike 2', baseFilter: '\\nor\\1\\gametype\\hidden'},
 ]

@@ -6,6 +6,13 @@ import { logger } from '../logger'
 
 const REQUEST_DELAY_MS = 1_000
 const SLOT_MS = 15 * 60_000
+const REGIONS = [0, 1, 2, 3, 4, 5, 6, 7]
+const MAX_SPLIT_REQUESTS = 100
+// Fake-server farm = one IP with many servers: either many copies of a few names, or simply too many to be a real host
+// (real CS:Source hosts run up to ~20 servers per IP, each with its own name; farms run 45-720)
+const FARM_MIN_SERVERS_PER_IP = 20
+const FARM_MIN_COPIES_PER_NAME = 3
+const FARM_ALWAYS_SERVERS_PER_IP = 50
 
 async function delay(ms: number): Promise<void> {
   await new Promise((resolve) => setTimeout(resolve, ms))
@@ -63,18 +70,136 @@ async function fetchWithFallback(
   return allServers
 }
 
+// positive conditions are appended as is; all negated ones share one \nor\ group (NOT a AND NOT b ...)
+interface SplitNode {
+  pos: string[]
+  neg: string[]
+  byRegion: boolean
+  byMap: boolean
+}
+
+function nodeFilter(node: SplitNode): string {
+  return node.pos.join('') + (node.neg.length > 0 ? `\\nor\\${node.neg.length}${node.neg.join('')}` : '')
+}
+
+function countsDesc(values: string[]): Array<[string, number]> {
+  const counts = new Map<string, number>()
+  for (const v of values) counts.set(v, (counts.get(v) ?? 0) + 1)
+  return [...counts.entries()].sort((a, b) => b[1] - a[1])
+}
+
+function usedValues(conditions: string[], key: string): Set<string> {
+  const prefix = `\\${key}\\`
+  return new Set(conditions.filter((c) => c.startsWith(prefix)).map((c) => c.slice(prefix.length)))
+}
+
+// Splits a node that hit the limit into disjoint children that together cover it; null when nothing is left to split by
+function splitNode(node: SplitNode, servers: SteamServer[]): SplitNode[] | null {
+  if (!node.byRegion) {
+    const regions = REGIONS.map((r) => `\\region\\${r}`)
+    return [
+      ...regions.map((r) => ({ ...node, byRegion: true, pos: [...node.pos, r] })),
+      { ...node, byRegion: true, neg: [...node.neg, ...regions] }, // region -1, 255 and anything else
+    ]
+  }
+
+  if (!node.byMap) {
+    // peel off the most common map; the rest is split again if it still hits the limit
+    const used = usedValues(node.neg, 'map')
+    const map = countsDesc(servers.map((s) => s.map)).find(([m]) => m !== '' && !m.includes('\\') && !used.has(m))?.[0]
+    if (map === undefined) return null
+    return [
+      { ...node, byMap: true, pos: [...node.pos, `\\map\\${map}`] },
+      { ...node, neg: [...node.neg, `\\map\\${map}`] },
+    ]
+  }
+
+  // one map is over the limit: split by the gametype tag closest to half of the response
+  const used = usedValues([...node.pos, ...node.neg], 'gametype')
+  const tags = countsDesc(servers.flatMap((s) => (s.gametype ?? '').split(',').filter((t) => t !== '' && !t.includes('\\'))))
+    .filter(([tag, n]) => !used.has(tag) && n < servers.length)
+  if (tags.length === 0) return null
+  const half = servers.length / 2
+  const [tag] = tags.reduce((best, cur) => (Math.abs(cur[1] - half) < Math.abs(best[1] - half) ? cur : best))
+  return [
+    { ...node, pos: [...node.pos, `\\gametype\\${tag}`] },
+    { ...node, neg: [...node.neg, `\\gametype\\${tag}`] },
+  ]
+}
+
+async function fetchBySplitting(game: GameConfig): Promise<{ servers: SteamServer[]; complete: boolean }> {
+  const found = new Map<string, SteamServer>()
+  let requests = 0
+  let complete = true
+
+  const walk = async (node: SplitNode): Promise<void> => {
+    if (requests >= MAX_SPLIT_REQUESTS) {
+      complete = false
+      return
+    }
+    if (requests > 0) await delay(REQUEST_DELAY_MS)
+    requests++
+
+    const servers = await fetchSteamServers(game.appid, (game.baseFilter ?? '') + nodeFilter(node))
+    for (const s of servers) found.set(s.addr, s)
+    if (servers.length < STEAM_API_LIMIT) return
+
+    const children = splitNode(node, servers)
+    if (children === null) {
+      complete = false
+      return
+    }
+    for (const child of children) await walk(child)
+  }
+
+  await walk({ pos: [], neg: [], byRegion: false, byMap: false })
+
+  const status = complete ? 'complete' : `INCOMPLETE (request cap ${MAX_SPLIT_REQUESTS} or nothing left to split by)`
+  logger.info(`[${game.name}] Split into ${requests} request(s): ${found.size} unique servers, ${status}`)
+  return { servers: [...found.values()], complete }
+}
+
+function dropFarms(servers: SteamServer[], label: string): SteamServer[] {
+  const byIp = new Map<string, { count: number; names: Set<string> }>()
+  for (const s of servers) {
+    const ip = s.addr.split(':')[0]
+    const entry = byIp.get(ip) ?? { count: 0, names: new Set<string>() }
+    entry.count++
+    entry.names.add(s.name)
+    byIp.set(ip, entry)
+  }
+
+  const farms = new Set(
+    [...byIp.entries()]
+      .filter(
+        ([, e]) =>
+          e.count >= FARM_ALWAYS_SERVERS_PER_IP ||
+          (e.count >= FARM_MIN_SERVERS_PER_IP && e.count >= FARM_MIN_COPIES_PER_NAME * e.names.size),
+      )
+      .map(([ip]) => ip),
+  )
+  const kept = servers.filter((s) => !farms.has(s.addr.split(':')[0]))
+  logger.info(`[${label}] Dropped ${servers.length - kept.length} farm server(s) on ${farms.size} IP(s), kept ${kept.length}`)
+  return kept
+}
+
+export async function fetchGameServers(game: GameConfig): Promise<{ servers: SteamServer[]; complete: boolean }> {
+  const fetched = game.splitOnLimit
+    ? await fetchBySplitting(game)
+    : await fetchWithFallback(game.appid, game.name, game.baseFilter ?? '', game.fallbackFilters, 0).then((servers) => ({
+        servers,
+        complete: servers.length < STEAM_API_LIMIT, // a merged sub-filter result is not known to be complete
+      }))
+
+  return game.dropFarms ? { ...fetched, servers: dropFarms(fetched.servers, game.name) } : fetched
+}
+
 async function collectGame(game: GameConfig): Promise<void> {
   logger.info(`Processing game: ${game.name} (appid: ${game.appid})`)
 
-  const servers = await fetchWithFallback(
-    game.appid,
-    game.name,
-    game.baseFilter ?? '',
-    game.fallbackFilters,
-    0,
-  )
+  const { servers, complete } = await fetchGameServers(game)
 
-  await processServers(servers, game.appid)
+  await processServers(servers, game.appid, complete)
 }
 
 export async function runCollectJob(): Promise<void> {
