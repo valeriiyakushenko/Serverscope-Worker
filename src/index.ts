@@ -63,13 +63,13 @@ async function bootstrap(): Promise<void> {
     })
   })
 
-  cron.schedule('0 * * * *', () => {
+  cron.schedule('5 * * * *', () => {
     withLock(LOCK_CHARTS, 'charts', runUpdateChartsJob).catch((err: unknown) => {
       logger.error(`Scheduled charts job failed: ${err instanceof Error ? err.message : String(err)}`)
     })
   }, { timezone: 'UTC' })
 
-  cron.schedule('0 0 * * *', () => {
+  cron.schedule('10 0 * * *', () => {
     withLock(LOCK_RANKING, 'ranking', runRankingJob).catch((err: unknown) => {
       logger.error(`Scheduled ranking job failed: ${err instanceof Error ? err.message : String(err)}`)
     })
@@ -77,7 +77,7 @@ async function bootstrap(): Promise<void> {
 
   // cleanup (runCleanupJob) is not scheduled: raw 15-minute points are kept until the storage schema is reworked
 
-  logger.info('Cron jobs scheduled: collect */15 * * * *, games stats 0 * * * * (UTC), rankings 0 0 * * * (UTC). Worker is running...')
+  logger.info('Cron jobs scheduled: collect */15 * * * *, games stats 5 * * * * (UTC), rankings 10 0 * * * (UTC). Worker is running...')
 }
 
 bootstrap().catch((err: unknown) => {
