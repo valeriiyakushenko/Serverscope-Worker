@@ -1,3 +1,5 @@
+import { EntityManager } from 'typeorm'
+
 import { AppDataSource } from '../config/database'
 import { TRACKED_GAMES } from '../config/games'
 import { logger } from '../logger'
@@ -7,7 +9,7 @@ const CHUNK_SIZE = 500
 // a server with no players for this long drops out of the ranking (rank = 0); it comes back once it is seen again
 const RANKED_WITHIN = '48 hours'
 
-async function computeRanks(appid: number, now: Date): Promise<RankRow[]> {
+async function computeRanks(appid: number, now: Date, dayStart: Date): Promise<RankRow[]> {
   return AppDataSource.query<RankRow[]>(
     `
     WITH
@@ -76,7 +78,7 @@ async function computeRanks(appid: number, now: Date): Promise<RankRow[]> {
           ROW_NUMBER() OVER (PARTITION BY sr.server_id ORDER BY sr.calculated_at DESC) AS rn
         FROM server_rankings sr
         WHERE sr.appid = $2
-          AND sr.calculated_at < $1
+          AND sr.calculated_at < $3
       ) sub
       WHERE rn <= 3
       GROUP BY server_id
@@ -140,56 +142,36 @@ async function computeRanks(appid: number, now: Date): Promise<RankRow[]> {
     LEFT JOIN popularity_calc pc ON pc.server_id = sm.server_id
     LEFT JOIN stability_calc  sc ON sc.server_id = sm.server_id
     `,
-    [now, appid],
+    [now, appid, dayStart],
   )
 }
 
 // servers left out of this calculation must not keep the rank of an earlier one
-async function clearDroppedRanks(appid: number, rankedIds: number[]): Promise<void> {
-  const [, cleared]: [unknown, number] = await AppDataSource.query(
+async function clearDroppedRanks(db: EntityManager, appid: number, rankedIds: number[]): Promise<void> {
+  const [, cleared]: [unknown, number] = await db.query(
     `UPDATE servers SET rank = 0 WHERE appid = $1 AND rank <> 0 AND id <> ALL($2::int[])`,
     [appid, rankedIds],
   )
   logger.info(`[appid:${appid}] Cleared rank of ${cleared} server(s) not seen within ${RANKED_WITHIN}`)
 }
 
-export async function calculateDailyRankings(): Promise<void> {
-  const now = new Date()
-  const appids = TRACKED_GAMES.map((g) => g.appid)
+async function rankGame(appid: number, now: Date, dayStart: Date): Promise<void> {
+  logger.info(`[appid:${appid}] Computing ranks...`)
 
-  // ranks from a window with empty hours (first day, worker outage) are noise and feed three more days via historical_rank_avg
-  const [{ hours }] = await AppDataSource.query<Array<{ hours: number }>>(
-    `SELECT COUNT(*)::int AS hours
-     FROM generate_series(
-       date_trunc('hour', $1::timestamptz) - INTERVAL '24 hours',
-       date_trunc('hour', $1::timestamptz) - INTERVAL '1 hour',
-       INTERVAL '1 hour'
-     ) AS h
-     WHERE EXISTS (SELECT 1 FROM online_records WHERE recorded_at >= h AND recorded_at < h + INTERVAL '1 hour')`,
-    [now],
-  )
-  if (hours < 24) {
-    logger.warn(`Ranking window is incomplete (${hours}/24 hours have data), calculation skipped`)
+  const rows = await computeRanks(appid, now, dayStart)
+
+  if (rows.length === 0) {
+    logger.warn(`[appid:${appid}] No servers seen within ${RANKED_WITHIN}, skipping`)
+    await clearDroppedRanks(AppDataSource.manager, appid, [])
     return
   }
 
-  logger.info(`Calculating daily rankings for ${appids.length} game(s)...`)
+  logger.info(`[appid:${appid}] Inserting ${rows.length} ranking records`)
 
-  for (const appid of appids) {
-    logger.info(`[appid:${appid}] Computing ranks...`)
+  const scored = scoreServers(rows)
 
-    const rows = await computeRanks(appid, now)
-
-    if (rows.length === 0) {
-      logger.warn(`[appid:${appid}] No servers seen within ${RANKED_WITHIN}, skipping`)
-      await clearDroppedRanks(appid, [])
-      continue
-    }
-
-    logger.info(`[appid:${appid}] Inserting ${rows.length} ranking records`)
-
-    const scored = scoreServers(rows)
-
+  // all-or-nothing per game: the API never sees a mix of old and new ranks, and a failure keeps the previous ones
+  await AppDataSource.transaction(async (manager) => {
     for (let i = 0; i < scored.length; i += CHUNK_SIZE) {
       const chunk = scored.slice(i, i + CHUNK_SIZE)
       const values = chunk
@@ -211,10 +193,10 @@ export async function calculateDailyRankings(): Promise<void> {
         r.score,
         r.popularity,
         r.stability,
-        now,
+        dayStart,
       ])
 
-      await AppDataSource.query(
+      await manager.query(
         `INSERT INTO server_rankings (server_id, appid, median_players, rank, empty_count, uptime_ratio, historical_rank_avg, score, popularity, stability, calculated_at)
          VALUES ${values}
          ON CONFLICT (server_id, calculated_at) DO UPDATE SET
@@ -235,15 +217,48 @@ export async function calculateDailyRankings(): Promise<void> {
       const chunk = scored.slice(i, i + CHUNK_SIZE)
       const valuePlaceholders = chunk.map((_, j) => `($${j * 2 + 1}::int, $${j * 2 + 2}::int)`).join(', ')
       const params = chunk.flatMap((r, j) => [r.serverId, i + j + 1])
-      await AppDataSource.query(
+      await manager.query(
         `UPDATE servers SET rank = v.rank FROM (VALUES ${valuePlaceholders}) AS v(id, rank) WHERE servers.id = v.id`,
         params,
       )
     }
 
-    await clearDroppedRanks(appid, scored.map((r) => r.serverId))
+    await clearDroppedRanks(manager, appid, scored.map((r) => r.serverId))
+  })
 
-    logger.info(`[appid:${appid}] Rankings saved`)
+  logger.info(`[appid:${appid}] Rankings saved`)
+}
+
+export async function calculateDailyRankings(): Promise<void> {
+  const now = new Date()
+  // one row per server per UTC day: a second run the same day overwrites it via ON CONFLICT instead of adding a duplicate
+  const dayStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()))
+  const appids = TRACKED_GAMES.map((g) => g.appid)
+
+  // ranks from a window with empty hours (first day, worker outage) are noise and feed three more days via historical_rank_avg
+  const [{ hours }] = await AppDataSource.query<Array<{ hours: number }>>(
+    `SELECT COUNT(*)::int AS hours
+     FROM generate_series(
+       date_trunc('hour', $1::timestamptz) - INTERVAL '24 hours',
+       date_trunc('hour', $1::timestamptz) - INTERVAL '1 hour',
+       INTERVAL '1 hour'
+     ) AS h
+     WHERE EXISTS (SELECT 1 FROM online_records WHERE recorded_at >= h AND recorded_at < h + INTERVAL '1 hour')`,
+    [now],
+  )
+  if (hours < 24) {
+    logger.warn(`Ranking window is incomplete (${hours}/24 hours have data), calculation skipped`)
+    return
+  }
+
+  logger.info(`Calculating daily rankings for ${appids.length} game(s)...`)
+
+  for (const appid of appids) {
+    try {
+      await rankGame(appid, now, dayStart)
+    } catch (err) {
+      logger.error(`[appid:${appid}] Ranking failed: ${err instanceof Error ? err.message : String(err)}`)
+    }
   }
 
   logger.info('Daily rankings calculation complete')
