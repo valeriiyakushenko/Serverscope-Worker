@@ -158,15 +158,10 @@ async function updateGameStats(parsed: ParsedServer[], now: Date): Promise<void>
   const appids = [...new Set(parsed.map((s) => s.appid))]
 
   for (const appid of appids) {
-    const players = parsed
-      .filter((s) => s.appid === appid)
-      .reduce((sum, s) => sum + s.players, 0)
-
-    const rows: Array<{ servers: string }> = await AppDataSource.query(
-      `SELECT COUNT(*)::int AS servers FROM servers WHERE appid = $1`,
-      [appid],
-    )
-    const servers = parseInt(rows[0].servers)
+    // online servers = servers in this response (\empty\1: at least one player); the servers table keeps every server ever seen
+    const gameServers = parsed.filter((s) => s.appid === appid)
+    const players = gameServers.reduce((sum, s) => sum + s.players, 0)
+    const servers = gameServers.length
 
     await AppDataSource.query(
       `UPDATE games SET players = $1, servers = $2, updated_at = $3 WHERE appid = $4`,
