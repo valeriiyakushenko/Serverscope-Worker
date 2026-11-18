@@ -83,50 +83,67 @@ async function computeRanks(appid: number, now: Date, dayStart: Date): Promise<R
       WHERE rn <= 3
       GROUP BY server_id
     ),
-    week_recent AS (
-      SELECT
-        st.server_id,
-        AVG(st.players) AS avg_players
-      FROM online_records st
-      WHERE st.server_id IN (SELECT id FROM servers WHERE appid = $2)
-        AND st.recorded_at >= $1 - INTERVAL '7 days'
-        AND st.recorded_at <  $1
-      GROUP BY st.server_id
+    -- an hour with no record from any server is a Worker outage or time before the first collection: "no data", not 0 players
+    -- shortcut: an hour with only some of its 4 collections still counts as a whole hour, it slightly lowers that hour's value
+    collected_hours AS (
+      SELECT h >= p.period_end - INTERVAL '7 days' AS recent
+      FROM period p,
+           generate_series(p.period_end - INTERVAL '14 days', p.period_end - INTERVAL '1 hour', INTERVAL '1 hour') h
+      WHERE EXISTS (SELECT 1 FROM online_records WHERE recorded_at >= h AND recorded_at < h + INTERVAL '1 hour')
     ),
-    week_prev AS (
+    weeks AS (
+      SELECT
+        (SELECT COUNT(*) FROM collected_hours WHERE recent)     AS recent_hours,
+        (SELECT COUNT(*) FROM collected_hours WHERE NOT recent) AS prev_hours,
+        -- popularity needs the whole previous week after the first full hour of collection
+        (SELECT date_trunc('hour', MIN(recorded_at)) + INTERVAL '1 hour' FROM online_records)
+          <= (SELECT period_end FROM period) - INTERVAL '14 days' AS prev_complete
+    ),
+    week_hourly AS (
       SELECT
         st.server_id,
-        AVG(st.players) AS avg_players
-      FROM online_records st
-      WHERE st.server_id IN (SELECT id FROM servers WHERE appid = $2)
-        AND st.recorded_at >= $1 - INTERVAL '14 days'
-        AND st.recorded_at <  $1 - INTERVAL '7 days'
-      GROUP BY st.server_id
+        date_trunc('hour', st.recorded_at) >= p.period_end - INTERVAL '7 days' AS recent,
+        SUM(st.players) / 4.0 AS players
+      FROM online_records st, period p
+      WHERE st.server_id IN (SELECT server_id FROM server_medians)
+        AND st.recorded_at >= p.period_end - INTERVAL '14 days'
+        AND st.recorded_at <  p.period_end
+      GROUP BY st.server_id, date_trunc('hour', st.recorded_at), p.period_end
+    ),
+    -- collected hours without a row are 0 players, so mean and stddev come from sums over all collected hours, not AVG/STDDEV over rows
+    week_sums AS (
+      SELECT
+        server_id,
+        COALESCE(SUM(players)           FILTER (WHERE recent), 0)     AS recent_sum,
+        COALESCE(SUM(players * players) FILTER (WHERE recent), 0)     AS recent_sumsq,
+        COALESCE(SUM(players)           FILTER (WHERE NOT recent), 0) AS prev_sum
+      FROM week_hourly
+      GROUP BY server_id
     ),
     popularity_calc AS (
       SELECT
-        COALESCE(wr.server_id, wp.server_id) AS server_id,
+        ws.server_id,
         GREATEST(-100.0, LEAST(100.0,
           CASE
-            WHEN COALESCE(wp.avg_players, 0) = 0 THEN 0
-            ELSE ROUND(((COALESCE(wr.avg_players, 0) - wp.avg_players) / wp.avg_players * 100)::numeric, 2)
+            -- until the previous week lies fully inside the collected history it would look empty
+            WHEN NOT w.prev_complete OR ws.prev_sum = 0 THEN 0
+            ELSE ROUND(((ws.recent_sum / w.recent_hours) / (ws.prev_sum / w.prev_hours) * 100 - 100)::numeric, 2)
           END
         )) AS popularity
-      FROM week_recent wr
-      FULL OUTER JOIN week_prev wp ON wp.server_id = wr.server_id
+      FROM week_sums ws, weeks w
     ),
     stability_calc AS (
       SELECT
-        st.server_id,
+        ws.server_id,
         CASE
-          WHEN AVG(st.players) = 0 THEN 0
-          ELSE ROUND(GREATEST(0, 1 - STDDEV(st.players) / NULLIF(AVG(st.players), 0))::numeric, 4)
+          WHEN ws.recent_sum = 0 THEN 0
+          ELSE ROUND(GREATEST(0, 1
+            -- sample stddev over n hours: sqrt((Σx² − (Σx)²/n) / (n − 1)); GREATEST guards rounding below 0
+            - SQRT(GREATEST(0, ws.recent_sumsq - ws.recent_sum * ws.recent_sum / w.recent_hours) / NULLIF(w.recent_hours - 1, 0))
+            / (ws.recent_sum / w.recent_hours)
+          )::numeric, 4)
         END AS stability
-      FROM online_records st
-      WHERE st.server_id IN (SELECT id FROM servers WHERE appid = $2)
-        AND st.recorded_at >= $1 - INTERVAL '7 days'
-        AND st.recorded_at <  $1
-      GROUP BY st.server_id
+      FROM week_sums ws, weeks w
     )
     SELECT
       sm.server_id,
