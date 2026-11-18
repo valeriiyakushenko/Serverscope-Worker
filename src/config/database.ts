@@ -13,6 +13,6 @@ export const AppDataSource = new DataSource({
   password: process.env.DB_PASSWORD,
   database: process.env.DB_NAME,
   entities: [Server, OnlineRecord, ServerRanking, Game],
-  synchronize: true,
+  synchronize: process.env.NODE_ENV !== 'production', // prod must not alter the live schema when an entity file changes
   logging: process.env.NODE_ENV === 'development',
 })
