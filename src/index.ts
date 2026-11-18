@@ -38,6 +38,14 @@ async function bootstrap(): Promise<void> {
   await AppDataSource.initialize()
   logger.info('Database connection established')
 
+  // A failed migration must not stop the collection: missed 15-minute points cannot be collected later.
+  try {
+    const applied = await AppDataSource.runMigrations()
+    if (applied.length > 0) logger.info(`Migrations applied: ${applied.map((m) => m.name).join(', ')}`)
+  } catch (err: unknown) {
+    logger.error(`Migrations failed: ${err instanceof Error ? err.message : String(err)}`)
+  }
+
   // charts run at the end of the hourly collection under its lock: on their own schedule a slow collection
   // overlaps them and both write the same servers rows (deadlocks)
   cron.schedule('*/15 * * * *', () => {

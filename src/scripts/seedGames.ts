@@ -65,6 +65,7 @@ async function getServerStats(appid: number): Promise<ServerStats> {
 
 async function main(): Promise<void> {
   await AppDataSource.initialize()
+  await AppDataSource.runMigrations() // an empty database gets its tables here
 
   const now = new Date()
   let inserted = 0
