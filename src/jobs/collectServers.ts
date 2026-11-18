@@ -1,9 +1,11 @@
 import { fetchSteamServers, STEAM_API_LIMIT, SteamServer } from '../api/steamClient'
 import { processServers } from '../services/serverService'
 import { TRACKED_GAMES, GameConfig, FilterNode } from '../config/games'
+import { AppDataSource } from '../config/database'
 import { logger } from '../logger'
 
 const REQUEST_DELAY_MS = 1_000
+const SLOT_MS = 15 * 60_000
 
 async function delay(ms: number): Promise<void> {
   await new Promise((resolve) => setTimeout(resolve, ms))
@@ -77,6 +79,18 @@ async function collectGame(game: GameConfig): Promise<void> {
 
 export async function runCollectJob(): Promise<void> {
   const startMs = Date.now()
+
+  // recorded_at is written with this process's clock, so the slot start is taken from it too, not from the DB's now()
+  const slotStart = new Date(Math.floor(startMs / SLOT_MS) * SLOT_MS)
+  const existing = await AppDataSource.query<unknown[]>(
+    'SELECT 1 FROM online_records WHERE recorded_at >= $1 LIMIT 1',
+    [slotStart],
+  )
+  if (existing.length > 0) {
+    logger.warn(`Slot ${slotStart.toISOString()} is already collected, skipping`)
+    return
+  }
+
   logger.info(`--- Starting server collection job (${TRACKED_GAMES.length} game(s)) ---`)
 
   for (let i = 0; i < TRACKED_GAMES.length; i++) {
