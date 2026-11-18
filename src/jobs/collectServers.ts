@@ -8,6 +8,8 @@ const REQUEST_DELAY_MS = 1_000
 const SLOT_MS = 15 * 60_000
 const REGIONS = [0, 1, 2, 3, 4, 5, 6, 7]
 const MAX_SPLIT_REQUESTS = 100
+// a response cut at the limit is not always exactly 10000 rows (9999 seen), so anything close counts as cut
+const NEAR_LIMIT = 9_500
 // Fake-server farm = one IP with many servers: either many copies of a few names, or simply too many to be a real host
 // (real CS:Source hosts run up to ~20 servers per IP, each with its own name; farms run 45-720)
 const FARM_MIN_SERVERS_PER_IP = 20
@@ -114,9 +116,12 @@ function splitNode(node: SplitNode, servers: SteamServer[]): SplitNode[] | null 
     ]
   }
 
-  // one map is over the limit: split by the gametype tag closest to half of the response
+  // one map is over the limit: split by the gametype tag closest to half of the response. Tags that change from minute to
+  // minute (DayZ puts the in-game time like "09:19") are skipped: a server would move between the two halves between
+  // their requests and be missed by both
   const used = usedValues([...node.pos, ...node.neg], 'gametype')
-  const tags = countsDesc(servers.flatMap((s) => (s.gametype ?? '').split(',').filter((t) => t !== '' && !t.includes('\\'))))
+  const isStable = (t: string): boolean => t !== '' && !t.includes('\\') && !t.includes(':') && !/^[0-9.]+$/.test(t)
+  const tags = countsDesc(servers.flatMap((s) => (s.gametype ?? '').split(',').filter(isStable)))
     .filter(([tag, n]) => !used.has(tag) && n < servers.length)
   if (tags.length === 0) return null
   const half = servers.length / 2
@@ -142,7 +147,7 @@ async function fetchBySplitting(game: GameConfig): Promise<{ servers: SteamServe
 
     const servers = await fetchSteamServers(game.appid, (game.baseFilter ?? '') + nodeFilter(node))
     for (const s of servers) found.set(s.addr, s)
-    if (servers.length < STEAM_API_LIMIT) return
+    if (servers.length < NEAR_LIMIT) return
 
     const children = splitNode(node, servers)
     if (children === null) {
@@ -188,7 +193,7 @@ export async function fetchGameServers(game: GameConfig): Promise<{ servers: Ste
     ? await fetchBySplitting(game)
     : await fetchWithFallback(game.appid, game.name, game.baseFilter ?? '', game.fallbackFilters, 0).then((servers) => ({
         servers,
-        complete: servers.length < STEAM_API_LIMIT, // a merged sub-filter result is not known to be complete
+        complete: servers.length < NEAR_LIMIT, // a merged sub-filter result is not known to be complete
       }))
 
   return game.dropFarms ? { ...fetched, servers: dropFarms(fetched.servers, game.name) } : fetched
