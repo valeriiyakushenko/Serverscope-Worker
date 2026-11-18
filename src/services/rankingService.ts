@@ -4,6 +4,8 @@ import { logger } from '../logger'
 import { RankRow, scoreServers } from './rankingScore'
 
 const CHUNK_SIZE = 500
+// a server with no players for this long drops out of the ranking (rank = 0); it comes back once it is seen again
+const RANKED_WITHIN = '48 hours'
 
 async function computeRanks(appid: number, now: Date): Promise<RankRow[]> {
   return AppDataSource.query<RankRow[]>(
@@ -42,6 +44,7 @@ async function computeRanks(appid: number, now: Date): Promise<RankRow[]> {
              ON sb.server_id = s.id
             AND sb.hour_bucket = hs.slot_start
       WHERE s.appid = $2
+        AND s.last_seen_at >= $1::timestamptz - INTERVAL '${RANKED_WITHIN}'
     ),
     server_medians AS (
       SELECT
@@ -141,6 +144,15 @@ async function computeRanks(appid: number, now: Date): Promise<RankRow[]> {
   )
 }
 
+// servers left out of this calculation must not keep the rank of an earlier one
+async function clearDroppedRanks(appid: number, rankedIds: number[]): Promise<void> {
+  const [, cleared]: [unknown, number] = await AppDataSource.query(
+    `UPDATE servers SET rank = 0 WHERE appid = $1 AND rank <> 0 AND id <> ALL($2::int[])`,
+    [appid, rankedIds],
+  )
+  logger.info(`[appid:${appid}] Cleared rank of ${cleared} server(s) not seen within ${RANKED_WITHIN}`)
+}
+
 export async function calculateDailyRankings(): Promise<void> {
   const now = new Date()
   const appids = TRACKED_GAMES.map((g) => g.appid)
@@ -169,7 +181,8 @@ export async function calculateDailyRankings(): Promise<void> {
     const rows = await computeRanks(appid, now)
 
     if (rows.length === 0) {
-      logger.warn(`[appid:${appid}] No servers found, skipping`)
+      logger.warn(`[appid:${appid}] No servers seen within ${RANKED_WITHIN}, skipping`)
+      await clearDroppedRanks(appid, [])
       continue
     }
 
@@ -227,6 +240,8 @@ export async function calculateDailyRankings(): Promise<void> {
         params,
       )
     }
+
+    await clearDroppedRanks(appid, scored.map((r) => r.serverId))
 
     logger.info(`[appid:${appid}] Rankings saved`)
   }
