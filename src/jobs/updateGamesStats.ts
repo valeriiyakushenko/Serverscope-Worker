@@ -101,6 +101,12 @@ export async function runUpdateChartsJob(): Promise<void> {
   const now = new Date()
 
   await updateServerCharts(now)
+  // servers with no point in the 24h window are skipped above and would keep their last sparkline forever
+  await AppDataSource.query(
+    `UPDATE servers SET hourly_online = '[]'::jsonb
+     WHERE last_seen_at < date_trunc('hour', $1::timestamptz) - INTERVAL '24 hours' AND hourly_online <> '[]'::jsonb`,
+    [now],
+  )
   await updateGameCharts(now)
   logger.info('Game hourly_online updated')
 

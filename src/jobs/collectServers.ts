@@ -72,7 +72,7 @@ async function collectGame(game: GameConfig): Promise<void> {
     0,
   )
 
-  await processServers(servers)
+  await processServers(servers, game.appid)
 }
 
 export async function runCollectJob(): Promise<void> {

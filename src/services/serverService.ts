@@ -1,7 +1,7 @@
 import { AppDataSource } from '../config/database'
 import { Server } from '../entities/Server'
 import { OnlineRecord } from '../entities/OnlineRecord'
-import { SteamServer } from '../api/steamClient'
+import { STEAM_API_LIMIT, SteamServer } from '../api/steamClient'
 import { logger } from '../logger'
 
 const CHUNK_SIZE = 500
@@ -116,7 +116,18 @@ async function insertStats(parsed: ParsedServer[], now: Date): Promise<void> {
   logger.info(`Inserted ${totalInserted} stats records`)
 }
 
-export async function processServers(steamServers: SteamServer[]): Promise<void> {
+// Online = present in the last successful Steam response for its game; empty and stopped servers are not told apart
+async function markMissingOffline(appid: number, now: Date): Promise<void> {
+  const [, marked]: [unknown, number] = await AppDataSource.query(
+    `UPDATE servers SET is_online = false, players = 0, bots = 0
+     WHERE appid = $1 AND last_seen_at < $2 AND is_online`,
+    [appid, now],
+  )
+  logger.info(`Marked ${marked} missing servers offline`)
+}
+
+// A failed request never reaches here (throws in collectGame); an empty response returns below without marking
+export async function processServers(steamServers: SteamServer[], appid: number): Promise<void> {
   if (!steamServers.length) {
     logger.info('No servers in API response, skipping processing')
     return
@@ -131,6 +142,15 @@ export async function processServers(steamServers: SteamServer[]): Promise<void>
 
   await upsertServers(parsed)
   await insertStats(parsed, now)
+
+  // shortcut: a response at the limit may be incomplete, so absence proves nothing; this also skips a complete merged
+  // sub-filter result >= limit (no game has fallbackFilters yet) — pass a "complete" flag from fetchWithFallback if one gets them
+  if (steamServers.length < STEAM_API_LIMIT) {
+    await markMissingOffline(appid, now)
+  } else {
+    logger.warn(`Response reached ${STEAM_API_LIMIT} servers, not marking missing servers offline`)
+  }
+
   await updateGameStats(parsed, now)
 }
 
