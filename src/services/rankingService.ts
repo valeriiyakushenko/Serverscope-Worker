@@ -9,9 +9,8 @@ const CHUNK_SIZE = 500
 // a server with no players for this long drops out of the ranking (rank = 0); it comes back once it is seen again
 const RANKED_WITHIN = '48 hours'
 
-async function computeRanks(appid: number, now: Date, dayStart: Date): Promise<RankRow[]> {
-  return AppDataSource.query<RankRow[]>(
-    `
+// $1 = time of the run, $2 = appid, $3 = start of the UTC day. Exported so the measurement script can time it.
+export const COMPUTE_RANKS_SQL = `
     WITH
     period AS (
       SELECT
@@ -158,9 +157,10 @@ async function computeRanks(appid: number, now: Date, dayStart: Date): Promise<R
     LEFT JOIN historical      h  ON h.server_id  = sm.server_id
     LEFT JOIN popularity_calc pc ON pc.server_id = sm.server_id
     LEFT JOIN stability_calc  sc ON sc.server_id = sm.server_id
-    `,
-    [now, appid, dayStart],
-  )
+    `
+
+async function computeRanks(appid: number, now: Date, dayStart: Date): Promise<RankRow[]> {
+  return AppDataSource.query<RankRow[]>(COMPUTE_RANKS_SQL, [now, appid, dayStart])
 }
 
 // servers left out of this calculation must not keep the rank of an earlier one
