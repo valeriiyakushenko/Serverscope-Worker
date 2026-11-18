@@ -9,7 +9,6 @@ import { runUpdateChartsJob } from './jobs/updateGamesStats'
 import { logger } from './logger'
 
 const LOCK_COLLECT = 1
-const LOCK_CHARTS = 2
 const LOCK_RANKING = 3
 
 // Session-level advisory lock: skips the run if another process (or a still-running previous run) holds it.
@@ -39,17 +38,21 @@ async function bootstrap(): Promise<void> {
   await AppDataSource.initialize()
   logger.info('Database connection established')
 
+  // charts run at the end of the hourly collection under its lock: on their own schedule a slow collection
+  // overlaps them and both write the same servers rows (deadlocks)
   cron.schedule('*/15 * * * *', () => {
-    withLock(LOCK_COLLECT, 'collect', runCollectJob).catch((err: unknown) => {
+    const hourly = new Date().getUTCMinutes() === 0 // taken at start: a slow collection can cross the minute
+    withLock(LOCK_COLLECT, 'collect', async () => {
+      await runCollectJob()
+      if (hourly) {
+        await runUpdateChartsJob().catch((err: unknown) => {
+          logger.error(`Charts job failed: ${err instanceof Error ? err.message : String(err)}`)
+        })
+      }
+    }).catch((err: unknown) => {
       logger.error(`Scheduled collect job failed: ${err instanceof Error ? err.message : String(err)}`)
     })
   })
-
-  cron.schedule('5 * * * *', () => {
-    withLock(LOCK_CHARTS, 'charts', runUpdateChartsJob).catch((err: unknown) => {
-      logger.error(`Scheduled charts job failed: ${err instanceof Error ? err.message : String(err)}`)
-    })
-  }, { timezone: 'UTC' })
 
   cron.schedule('10 0 * * *', () => {
     withLock(LOCK_RANKING, 'ranking', runRankingJob).catch((err: unknown) => {
@@ -59,7 +62,7 @@ async function bootstrap(): Promise<void> {
 
   // cleanup (runCleanupJob) is not scheduled: raw 15-minute points are kept until the storage schema is reworked
 
-  logger.info('Cron jobs scheduled: collect */15 * * * *, games stats 5 * * * * (UTC), rankings 10 0 * * * (UTC). Worker is running...')
+  logger.info('Cron jobs scheduled: collect */15 * * * * (charts after the :00 run), rankings 10 0 * * * (UTC). Worker is running...')
 }
 
 bootstrap().catch((err: unknown) => {
