@@ -3,6 +3,7 @@ import { Server } from '../entities/Server'
 import { OnlineRecord } from '../entities/OnlineRecord'
 import { STEAM_API_LIMIT, SteamServer } from '../api/steamClient'
 import { logger } from '../logger'
+import { mirrorPoints } from './storageService'
 
 const CHUNK_SIZE = 500
 
@@ -143,6 +144,7 @@ export async function processServers(steamServers: SteamServer[], appid: number,
 
   await upsertServers(parsed)
   await insertStats(parsed, now)
+  await mirrorPoints(now)
 
   if (complete) {
     await markMissingOffline(appid, now)

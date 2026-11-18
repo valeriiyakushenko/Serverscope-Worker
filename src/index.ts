@@ -6,9 +6,11 @@ import { AppDataSource } from './config/database'
 import { runCollectJob } from './jobs/collectServers'
 import { runRankingJob } from './jobs/calculateRankings'
 import { runUpdateChartsJob } from './jobs/updateGamesStats'
+import { enableStorage, runStorageJob } from './services/storageService'
 import { logger } from './logger'
 
 const LOCK_COLLECT = 1
+const LOCK_STORAGE = 2
 const LOCK_RANKING = 3
 
 // Session-level advisory lock: skips the run if another process (or a still-running previous run) holds it.
@@ -39,11 +41,13 @@ async function bootstrap(): Promise<void> {
   logger.info('Database connection established')
 
   // A failed migration must not stop the collection: missed 15-minute points cannot be collected later.
+  // The old tables keep working; the tiered storage stays off until the next start.
   try {
     const applied = await AppDataSource.runMigrations()
     if (applied.length > 0) logger.info(`Migrations applied: ${applied.map((m) => m.name).join(', ')}`)
+    enableStorage()
   } catch (err: unknown) {
-    logger.error(`Migrations failed: ${err instanceof Error ? err.message : String(err)}`)
+    logger.error(`Migrations failed, tiered storage is off: ${err instanceof Error ? err.message : String(err)}`)
   }
 
   // charts run at the end of the hourly collection under its lock: on their own schedule a slow collection
@@ -57,9 +61,13 @@ async function bootstrap(): Promise<void> {
           logger.error(`Charts job failed: ${err instanceof Error ? err.message : String(err)}`)
         })
       }
-    }).catch((err: unknown) => {
-      logger.error(`Scheduled collect job failed: ${err instanceof Error ? err.message : String(err)}`)
     })
+      // rollups do not write servers rows, so they run after the collect lock is released:
+      // a long first run (the whole history) must not make the next collection skip its slot
+      .then(() => (hourly ? withLock(LOCK_STORAGE, 'storage', runStorageJob) : undefined))
+      .catch((err: unknown) => {
+        logger.error(`Scheduled collect job failed: ${err instanceof Error ? err.message : String(err)}`)
+      })
   })
 
   cron.schedule('10 0 * * *', () => {
@@ -70,7 +78,7 @@ async function bootstrap(): Promise<void> {
 
   // cleanup (runCleanupJob) is not scheduled: raw 15-minute points are kept until the storage schema is reworked
 
-  logger.info('Cron jobs scheduled: collect */15 * * * * (charts after the :00 run), rankings 10 0 * * * (UTC). Worker is running...')
+  logger.info('Cron jobs scheduled: collect */15 * * * * (charts and storage rollups after the :00 run), rankings 10 0 * * * (UTC). Worker is running...')
 }
 
 bootstrap().catch((err: unknown) => {

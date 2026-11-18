@@ -1,5 +1,6 @@
 import { fetchSteamServers, STEAM_API_LIMIT, SteamServer } from '../api/steamClient'
 import { processServers } from '../services/serverService'
+import { ensurePartitions } from '../services/storageService'
 import { TRACKED_GAMES, GameConfig, FilterNode } from '../config/games'
 import { AppDataSource } from '../config/database'
 import { logger } from '../logger'
@@ -222,6 +223,7 @@ export async function runCollectJob(): Promise<void> {
   }
 
   logger.info(`--- Starting server collection job (${TRACKED_GAMES.length} game(s)) ---`)
+  await ensurePartitions(new Date(startMs))
 
   for (let i = 0; i < TRACKED_GAMES.length; i++) {
     const game = TRACKED_GAMES[i]
