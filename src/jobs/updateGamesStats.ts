@@ -72,7 +72,8 @@ export async function updateServerCharts(now: Date): Promise<void> {
       SELECT
         r.server_id,
         date_trunc('hour', r.recorded_at) AS hour,
-        AVG(r.players)::int               AS avg_players
+        -- empty servers are not collected, so a slot without a point counts as 0: divide by the 4 collections per hour, not AVG
+        (SUM(r.players) / 4.0)::int       AS avg_players
       FROM online_records r
       JOIN period ON r.recorded_at >= period.period_start AND r.recorded_at < period.period_end
       GROUP BY r.server_id, date_trunc('hour', r.recorded_at)

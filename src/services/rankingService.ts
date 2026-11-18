@@ -22,7 +22,8 @@ async function computeRanks(appid: number, now: Date): Promise<RankRow[]> {
       SELECT
         st.server_id,
         date_trunc('hour', st.recorded_at) AS hour_bucket,
-        AVG(st.players)                    AS avg_players
+        -- empty servers are not collected, so a slot without a point counts as 0: divide by the 4 collections per hour, not AVG
+        SUM(st.players) / 4.0              AS avg_players
       FROM online_records st
       JOIN period ON st.recorded_at >= period.period_start
                  AND st.recorded_at <  period.period_end
