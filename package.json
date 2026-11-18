@@ -7,7 +7,8 @@
     "build": "tsc",
     "start": "npm run build && node dist/index.js",
     "dev": "ts-node-dev --respawn --transpile-only src/index.ts",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "tsc && node --test dist/services/rankingScore.test.js"
   },
   "dependencies": {
     "axios": "^1.7.0",

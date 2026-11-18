@@ -1,18 +1,9 @@
 import { AppDataSource } from '../config/database'
 import { TRACKED_GAMES } from '../config/games'
 import { logger } from '../logger'
+import { RankRow, scoreServers } from './rankingScore'
 
 const CHUNK_SIZE = 500
-
-interface RankRow {
-  server_id: number
-  appid: number
-  median_players: string
-  empty_count: number
-  historical_rank_avg: string
-  popularity: string
-  stability: string
-}
 
 async function computeRanks(appid: number, now: Date): Promise<RankRow[]> {
   return AppDataSource.query<RankRow[]>(
@@ -183,21 +174,7 @@ export async function calculateDailyRankings(): Promise<void> {
 
     logger.info(`[appid:${appid}] Inserting ${rows.length} ranking records`)
 
-    const maxMedian = rows.reduce((max, r) => Math.max(max, parseFloat(r.median_players)), 0)
-
-    const scored = rows.map((r) => {
-      const median = parseFloat(r.median_players)
-      const emptyCount = r.empty_count
-      const historicalRankAvg = parseFloat(r.historical_rank_avg)
-      const uptimeRatio = 1 - emptyCount / 96
-      const medianNorm = maxMedian > 0 ? median / maxMedian : 0
-      const score = 0.5 * medianNorm + 0.25 * uptimeRatio + 0.25 * historicalRankAvg
-      const popularity = parseFloat(r.popularity)
-      const stability = parseFloat(r.stability)
-      return { serverId: r.server_id, appid: r.appid, median, emptyCount, uptimeRatio, historicalRankAvg, score, popularity, stability }
-    })
-
-    scored.sort((a, b) => b.score - a.score)
+    const scored = scoreServers(rows)
 
     for (let i = 0; i < scored.length; i += CHUNK_SIZE) {
       const chunk = scored.slice(i, i + CHUNK_SIZE)
